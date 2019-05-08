@@ -8,6 +8,8 @@ using Microsoft.ML.Data;
 using static Microsoft.ML.DataOperationsCatalog;
 using Microsoft.ML.Trainers;
 using Microsoft.ML.Transforms.Text;
+using mt4;
+
 // </SnippetAddUsings>
 
 namespace SentimentAnalysis
@@ -45,11 +47,12 @@ namespace SentimentAnalysis
             // </SnippetCallUseModelWithSingleItem>
 
             // <SnippetCallUseModelWithBatchItems>
-            UseModelWithBatchItems(mlContext, model);
+            //UseModelWithBatchItems(mlContext, model);
             // </SnippetCallUseModelWithBatchItems>
 
             Console.WriteLine();
             Console.WriteLine("=============== End of process ===============");
+            Console.ReadLine();
         }
 
         public static TrainTestData LoadData(MLContext mlContext)
@@ -58,7 +61,8 @@ namespace SentimentAnalysis
             // is the easiest way to get started, but ML.NET also allows you 
             // to load data from databases or in-memory collections.
             // <SnippetLoadData>
-            IDataView dataView = mlContext.Data.LoadFromTextFile<SentimentData>(_dataPath, hasHeader: false);
+            List<trade> data = getData();
+            IDataView dataView = mlContext.Data.LoadFromEnumerable<trade>(data);
             // </SnippetLoadData>
 
             // You need both a training dataset to train the model and a test dataset to evaluate the model.
@@ -73,27 +77,86 @@ namespace SentimentAnalysis
             // </SnippetReturnSplitData>           
         }
 
+        private static  List<trade> getData()
+        {
+            List<trade> data = new List<trade>();
+            using (var context = new mt4.barContext())
+            {
+                var trades = context.trade_result.ToList();
+                var bars = context.bar_stat.ToList();
+                foreach (var trade in trades)
+                {
+                    trade temp = new trade();
+                    var lastSixBars = bars.Where(x => x.id <= trade.id && x.id >= trade.id - 5);
+                    var entryBar = lastSixBars.Where(x => x.id == trade.id).FirstOrDefault();
+                    double bodyHeight = 0;
+                    foreach (var bar in lastSixBars)
+                    {
+                        bodyHeight += Math.Abs(bar.close - bar.open);
+                    }
+                    var entryBarHeight = Math.Abs(entryBar.close - entryBar.open);
+                    var avgBodyHeight = bodyHeight / 5;
+                    temp.smaPos = (float)0;
+                    if (trade.sma200Dist >= 1)
+                        temp.smaPos = (float)1;
+                    
+
+                    temp.bodyRatio = (float)(entryBarHeight / avgBodyHeight);
+                    temp.sma200Dist = trade.sma200Dist;
+                    temp.sma50Dist = trade.sma50Dist;
+                    temp.sma21Dist = trade.sma21Dist;
+                    temp.barRatio = (float)trade.barRatio;
+                    temp.position = trade.position;
+                    temp.NumOfReverseBars = trade.NumOfReverseBars;
+                    temp.result = Convert.ToBoolean(trade.result);
+                    temp.sma200Slope = (float)trade.sma200Slope;
+                    temp.sma50Slope = (float)trade.sma50Slope;
+                    temp.sma21Slope = (float)trade.sma21Slope;
+                    temp.bolUpDist = (float)trade.bolUPDist;
+                    temp.bolDownDist = (float)trade.bolDownDist;
+                    data.Add(temp);
+                }
+            }
+            return data;
+
+        }
+
         public static ITransformer BuildAndTrainModel(MLContext mlContext, IDataView splitTrainSet)
         {
             // Create a flexible pipeline (composed by a chain of estimators) for creating/training the model.
             // This is used to format and clean the data.  
             // Convert the text column to numeric vectors (Features column) 
             // <SnippetFeaturizeText>
-            var estimator = mlContext.Transforms.Text.FeaturizeText(outputColumnName: "Features", inputColumnName: nameof(SentimentData.SentimentText))
+            //var estimator = mlContext.Transforms.Text.FeaturizeText(outputColumnName: "Features", inputColumnName: nameof(SentimentData.SentimentText))
             //</SnippetFeaturizeText>
             // append the machine learning task to the estimator
             // <SnippetAddTrainer> 
-            .Append(mlContext.BinaryClassification.Trainers.SdcaLogisticRegression(labelColumnName: "Label", featureColumnName: "Features"));
+            //.Append(mlContext.BinaryClassification.Trainers.SdcaLogisticRegression(labelColumnName: "Label", featureColumnName: "Features"));
             // </SnippetAddTrainer>
+
+
+            //"sma200Dist", "sma50Dist", "sma21Dist",
+            var dataPrepEstimator = mlContext.Transforms.Text.FeaturizeText(outputColumnName: "Pos", inputColumnName:nameof(trade.position))
+                                                        .Append(mlContext.Transforms.NormalizeMinMax("bodyRatio"))
+                                                        .Append(mlContext.Transforms.NormalizeMinMax("smaPos"))
+                                                        .Append(mlContext.Transforms.NormalizeMinMax("barRatio"))
+                                                        .Append(mlContext.Transforms.NormalizeMinMax("sma200Slope"))
+                                                        .Append(mlContext.Transforms.NormalizeMinMax("sma50Slope"))
+                                                        .Append(mlContext.Transforms.NormalizeMinMax("sma21Slope"))
+                                                        .Append(mlContext.Transforms.NormalizeMinMax("bolUpDist"))
+                                                        .Append(mlContext.Transforms.NormalizeMinMax("bolDownDist"))
+                                                        .Append(mlContext.Transforms.Concatenate("Features",   "bodyRatio", "Pos","smaPos", "barRatio", "sma200Slope", "sma50Slope", "sma21Slope", "bolUpDist", "bolDownDist"))
+                                                        .Append(mlContext.Transforms.NormalizeMinMax("Features"))
+                                                        .Append(mlContext.BinaryClassification.Trainers.SdcaLogisticRegression(labelColumnName: "Label", featureColumnName: "Features")); 
+
+            var model = dataPrepEstimator.Fit(splitTrainSet);
 
             // Create and train the model based on the dataset that has been loaded, transformed.
             // <SnippetTrainModel>
             Console.WriteLine("=============== Create and Train the Model ===============");
-            var model = estimator.Fit(splitTrainSet);
             Console.WriteLine("=============== End of training ===============");
             Console.WriteLine();
             // </SnippetTrainModel>
-
             // Returns the model we trained to use for evaluation.
             // <SnippetReturnModel>
             return model;
@@ -133,37 +196,51 @@ namespace SentimentAnalysis
             Console.WriteLine("--------------------------------");
             Console.WriteLine($"Accuracy: {metrics.Accuracy:P2}");
             Console.WriteLine($"Auc: {metrics.AreaUnderRocCurve:P2}");
-            Console.WriteLine($"F1Score: {metrics.F1Score:P2}");
+            Console.WriteLine($"F1Score: {metrics.F1Score:P2}"); 
             Console.WriteLine("=============== End of model evaluation ===============");
             //</SnippetDisplayMetrics>
-
+            
         }
 
         private static void UseModelWithSingleItem(MLContext mlContext, ITransformer model)
         {
             // <SnippetCreatePredictionEngine1>
-            PredictionEngine<SentimentData, SentimentPrediction> predictionFunction = mlContext.Model.CreatePredictionEngine<SentimentData, SentimentPrediction>(model);
+            PredictionEngine<trade, TradePrediction> predictionFunction = mlContext.Model.CreatePredictionEngine<trade, TradePrediction>(model);
             // </SnippetCreatePredictionEngine1>
-
-            // <SnippetCreateTestIssue1>
-            SentimentData sampleStatement = new SentimentData
+            using (var context = new mt4.barContext())
             {
-                SentimentText = "This was a very bad steak"
-            };
-            // </SnippetCreateTestIssue1>
+                var trade = context.ML_queue.FirstOrDefault();
+                trade sampletrade = new trade();
 
-            // <SnippetPredict>
-            var resultprediction = predictionFunction.Predict(sampleStatement);
-            // </SnippetPredict>
-            // <SnippetOutputPrediction>
-            Console.WriteLine();
-            Console.WriteLine("=============== Prediction Test of model with a single sample and test dataset ===============");
 
-            Console.WriteLine();
-            Console.WriteLine($"Sentiment: {resultprediction.SentimentText} | Prediction: {(Convert.ToBoolean(resultprediction.Prediction) ? "Positive" : "Negative")} | Probability: {resultprediction.Probability} ");
+                trade sampleTrade = new trade
+                    {
+                        position = trade.position,
+                        bodyRatio = trade.bodyRatio,
+                        sma200Slope = trade.sma200Slope,
+                        sma50Slope = trade.sma50Slope,
+                        sma21Slope = trade.sma21Slope,
+                        bolUpDist = trade.bolUpDist,
+                        bolDownDist = trade.bolDownDist,
+                        barRatio = trade.barRatio,
+                    };
+                 </SnippetCreateTestIssue1>
 
-            Console.WriteLine("=============== End of Predictions ===============");
-            Console.WriteLine();
+                // <SnippetPredict>
+                var resultprediction = predictionFunction.Predict(trade);
+                // </SnippetPredict>
+                // <SnippetOutputPrediction>
+                Console.WriteLine();
+                Console.WriteLine("=============== Prediction Test of model with a single sample and test dataset ===============");
+
+                Console.WriteLine();
+                Console.WriteLine($"Sentiment:  | Prediction: {(Convert.ToBoolean(resultprediction.Prediction) ? "Positive" : "Negative")} | Probability: {resultprediction.Probability} ");
+
+                Console.WriteLine("=============== End of Predictions ===============");
+
+                Console.WriteLine();
+            }
+            }
             // </SnippetOutputPrediction>
         }
 
@@ -211,6 +288,25 @@ namespace SentimentAnalysis
             Console.WriteLine("=============== End of predictions ===============");
             // </SnippetDisplayResults>       
         }
+
+        public trade getTrade()
+        {
+            using (var context = new mt4.barContext())
+            {
+                var trade = context.ML_queue.FirstOrDefault();
+                trade.position = position,
+                    bodyRatio = bodyRatio,
+                    sma200Slope = sma200Slope,
+                    sma50Slope = sma50Slope,
+                    sma21Slope = sma21Slope,
+                    bolUpDist = bolUpDist,
+                    bolDownDist = bolDownDist,
+                    barRatio = barRatio,
+                }
+            }
+            return data;
+        }
+
 
     }
 }

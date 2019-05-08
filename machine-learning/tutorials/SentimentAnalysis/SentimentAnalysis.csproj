@@ -19,4 +19,12 @@
     </None>
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="Data\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\mt4\mt4\mt4.csproj" />
+  </ItemGroup>
+
 </Project>
